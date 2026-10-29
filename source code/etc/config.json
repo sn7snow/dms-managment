@@ -1,0 +1,17 @@
+{
+  "root": "/opt/dms",
+  "listen_address": "127.0.0.1",
+  "port": 8080,
+  "tls_cert_file": "",
+  "tls_key_file": "",
+  "refresh_token": "REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS",
+  "users": [
+    {
+      "user": "admin",
+      "pass_salt": "00000000000000000000000000000000",
+      "pass_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "groups": ["admin"],
+      "admin": true
+    }
+  ]
+}
