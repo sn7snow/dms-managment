@@ -17,8 +17,15 @@ configure_file(
 
 qt_add_executable(dms-qt-client
     src/main.cpp
-    src/main_window.cpp
+    src/main_window_files.cpp
     src/main_window.hpp
+    src/main_window_internal.h
+    src/main_window_menu.cpp
+    src/main_window_network.cpp
+    src/main_window_notifications.cpp
+    src/main_window_session.cpp
+    src/main_window_tree.cpp
+    src/main_window_versions.cpp
 )
 
 target_link_libraries(dms-qt-client PRIVATE Qt6::Widgets Qt6::Network)

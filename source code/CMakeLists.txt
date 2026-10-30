@@ -27,7 +27,12 @@ target_link_libraries(dms_core
 )
 target_compile_options(dms_core PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(dms-server src/server_main.cpp)
+add_executable(dms-server
+    src/server_api.cpp
+    src/server_http.cpp
+    src/server_main.cpp
+    src/server_runtime.cpp
+)
 target_link_libraries(dms-server PRIVATE dms_core)
 
 add_executable(dms-cron src/cron_main.cpp)

@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "dms/storage.hpp"
 
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <functional>
@@ -84,6 +86,73 @@ bool IsWithin(const std::filesystem::path& root,
         }
     }
     return true;
+}
+
+std::string Trim(std::string value) {
+    const auto first = std::find_if_not(value.begin(), value.end(),
+        [](unsigned char ch) { return std::isspace(ch) != 0; });
+    const auto last = std::find_if_not(value.rbegin(), value.rend(),
+        [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
+    if (first >= last) return {};
+    return std::string(first, last);
+}
+
+std::unordered_set<std::string> LoadExtensionList(
+    const std::filesystem::path& file, bool allow_empty) {
+    const auto status = std::filesystem::symlink_status(file);
+    if (!std::filesystem::is_regular_file(status)) {
+        throw std::runtime_error(
+            "Upload extension list must be a regular file: " + file.string());
+    }
+
+    std::ifstream input(file);
+    if (!input) {
+        throw std::runtime_error("Cannot read upload extension list: " +
+                                 file.string());
+    }
+
+    std::unordered_set<std::string> extensions;
+    std::string line;
+    std::size_t line_number = 0;
+    while (std::getline(input, line)) {
+        ++line_number;
+        auto entry = Trim(std::move(line));
+        if (entry.empty() || entry.front() == '#') continue;
+        if (entry.front() == '.') entry.erase(entry.begin());
+        if (entry.empty() ||
+            !std::all_of(entry.begin(), entry.end(), [](unsigned char ch) {
+                return (ch >= 'a' && ch <= 'z') ||
+                       (ch >= 'A' && ch <= 'Z') ||
+                       (ch >= '0' && ch <= '9');
+            })) {
+            throw std::runtime_error(
+                "Invalid extension on line " + std::to_string(line_number) +
+                " of " + file.string());
+        }
+        std::transform(entry.begin(), entry.end(), entry.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        extensions.insert(std::move(entry));
+    }
+    if (input.bad()) {
+        throw std::runtime_error("Error reading upload extension list: " +
+                                 file.string());
+    }
+    if (!allow_empty && extensions.empty()) {
+        throw std::runtime_error("Upload allowlist must not be empty: " +
+                                 file.string());
+    }
+    return extensions;
+}
+
+bool IsProtectedExtension(const std::string& extension) {
+    static const std::unordered_set<std::string> protected_extensions{
+        "app", "apk", "asp", "aspx", "bash", "bat", "cgi", "cmd", "com",
+        "deb", "desktop", "dylib", "dll", "exe", "fish", "hta", "jar",
+        "js", "lnk", "msi", "php", "pl", "ps1", "psm1", "py", "pyw",
+        "rb", "reg", "rpm", "scr", "sh", "so", "vbs", "wsf", "zsh"};
+    return protected_extensions.contains(extension);
 }
 
 }  // namespace
@@ -179,11 +248,46 @@ std::filesystem::path Config::Logs() const { return root / "logs"; }
 std::filesystem::path Config::PermissionsFile() const {
     return Etc() / "permissions.csv";
 }
+std::filesystem::path Config::UploadAllowlistFile() const {
+    return Etc() / "upload-allowlist.txt";
+}
+std::filesystem::path Config::UploadDenylistFile() const {
+    return Etc() / "upload-denylist.txt";
+}
 std::filesystem::path Config::PendingFile() const {
     return root / "admin" / "pending_delete.csv";
 }
 std::filesystem::path Config::MetadataFile() const {
     return Etc() / "file_metadata.json";
+}
+
+UploadExtensionPolicy::UploadExtensionPolicy(
+    const std::filesystem::path& allowlist_file,
+    const std::filesystem::path& denylist_file)
+    : allowed_(LoadExtensionList(allowlist_file, false)),
+      denied_(LoadExtensionList(denylist_file, true)) {}
+
+bool UploadExtensionPolicy::IsAllowed(const std::string& filename) const {
+    auto extension = std::filesystem::path(filename).extension().string();
+    if (extension.size() < 2 || extension.front() != '.') return false;
+    extension.erase(extension.begin());
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return !IsProtectedExtension(extension) && !denied_.contains(extension) &&
+           allowed_.contains(extension);
+}
+
+std::vector<std::string> UploadExtensionPolicy::AllowedExtensions() const {
+    std::vector<std::string> extensions;
+    for (const auto& extension : allowed_) {
+        if (!IsProtectedExtension(extension) && !denied_.contains(extension)) {
+            extensions.push_back(extension);
+        }
+    }
+    std::sort(extensions.begin(), extensions.end());
+    return extensions;
 }
 
 std::vector<unsigned char> FromHex(const std::string& hex) {

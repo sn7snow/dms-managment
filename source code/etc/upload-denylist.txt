@@ -1,0 +1,37 @@
+# One extension per line; a leading dot is optional.
+# Denied extensions are blocked even if they also appear in the allowlist.
+exe
+dll
+com
+scr
+msi
+bat
+cmd
+ps1
+psm1
+sh
+bash
+zsh
+fish
+so
+dylib
+app
+jar
+js
+vbs
+wsf
+hta
+php
+asp
+aspx
+py
+pyw
+pl
+rb
+cgi
+desktop
+deb
+rpm
+apk
+reg
+lnk

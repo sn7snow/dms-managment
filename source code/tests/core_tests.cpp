@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "dms/permission_provider.hpp"
 #include "dms/storage.hpp"
 
@@ -27,6 +28,7 @@ int main() {
             std::ofstream permissions(permissions_file);
             permissions << "/drawings/,@all,1,0,0,0,0,0,0\n"
                         << "/drawings/,design,1,1,0,0,0,0,1\n"
+                        << "/drawings/,renamer,1,0,0,0,0,0,0,1\n"
                         << "/drawings/private/,design,1,0,0,0,0,0,0\n"
                         << "/drawings/private/,review,0,1,0,0,0,1,0\n";
         }
@@ -51,6 +53,12 @@ int main() {
         Require(!permissions.Check("alice", {"design"}, "/drawings/private/new.dwg",
                                    dms::Action::UPLOAD).allowed,
                 "Upload permission should honor the most-specific rule");
+        Require(permissions.Check("carol", {"renamer"}, "/drawings/new.dwg",
+                                  dms::Action::RENAME).allowed,
+                "The appended rename permission bit should be recognized");
+        Require(!permissions.Check("alice", {"design"}, "/drawings/new.dwg",
+                                   dms::Action::RENAME).allowed,
+                "Legacy permission rows should deny rename by default");
 
         bool rejected = false;
         try {
@@ -89,6 +97,51 @@ int main() {
         Require(config_without_tls.PendingFile() ==
                     root / "admin" / "pending_delete.csv",
                 "Pending approvals should be stored outside the served file store");
+        Require(config_without_tls.UploadAllowlistFile() ==
+                    root / "etc" / "upload-allowlist.txt" &&
+                    config_without_tls.UploadDenylistFile() ==
+                    root / "etc" / "upload-denylist.txt",
+                "Upload extension lists should be stored under etc");
+
+        const auto allowlist = config_without_tls.UploadAllowlistFile();
+        const auto denylist = config_without_tls.UploadDenylistFile();
+        {
+            std::ofstream output(allowlist);
+            output << "# supported file types\n"
+                   << "dwg\n.PDF\nblocked\n.exe\n";
+        }
+        {
+            std::ofstream output(denylist);
+            output << " pdf \nblocked\n";
+        }
+        const dms::UploadExtensionPolicy extension_policy(allowlist, denylist);
+        Require(extension_policy.IsAllowed("drawing.DWG"),
+                "Extension allowlist should be case-insensitive");
+        Require(!extension_policy.IsAllowed("report.pdf"),
+                "Denylist should override an allowlist entry");
+        Require(!extension_policy.IsAllowed("program.exe"),
+                "Protected executable extensions must remain denied");
+        Require(!extension_policy.IsAllowed("README"),
+                "Files without extensions should be rejected");
+        const auto effective_extensions =
+            extension_policy.AllowedExtensions();
+        Require(effective_extensions.size() == 1 &&
+                    effective_extensions.front() == "dwg",
+                "Client policy should expose only effective allowed extensions");
+
+        {
+            std::ofstream output(allowlist);
+            output << "dwg;exe\n";
+        }
+        bool rejected_invalid_extension_list = false;
+        try {
+            (void)dms::UploadExtensionPolicy(allowlist, denylist);
+        } catch (const std::runtime_error&) {
+            rejected_invalid_extension_list = true;
+        }
+        Require(rejected_invalid_extension_list,
+                "Malformed extension lists must fail closed");
+
         auto tls_config = base_config;
         tls_config["tls_cert_file"] = "/tmp/dms-test/server.crt";
         tls_config["tls_key_file"] = "/tmp/dms-test/server.key";

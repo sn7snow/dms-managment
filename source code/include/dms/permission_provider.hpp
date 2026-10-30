@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include <filesystem>
@@ -9,7 +10,7 @@
 
 namespace dms {
 
-enum class Action { READ, WRITE, UPLOAD, DELETE, ADD_VERSION, DEL_VERSION };
+enum class Action { READ, WRITE, UPLOAD, DELETE, ADD_VERSION, DEL_VERSION, RENAME };
 enum class SaveMode { OVERWRITE_LAST, CREATE_NEW };
 
 struct PermissionResult {
@@ -46,6 +47,7 @@ public:
         bool remove = false;
         bool add_version = false;
         bool delete_version = false;
+        bool rename = false;
         SaveMode save_mode = SaveMode::OVERWRITE_LAST;
     };
 

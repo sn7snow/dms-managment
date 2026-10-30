@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "dms/permission_provider.hpp"
 
 #include <algorithm>
@@ -111,10 +112,10 @@ void CsvPermissionProvider::Reload() {
         if (line_number == 1 && !fields.empty() && fields[0] == "路径") {
             continue;
         }
-        if (fields.size() != 8 && fields.size() != 9) {
+        if (fields.size() != 8 && fields.size() != 9 && fields.size() != 10) {
             throw std::runtime_error("permissions.csv line " +
                                      std::to_string(line_number) +
-                                     " must contain 8 or 9 columns");
+                                     " must contain 8, 9, or 10 columns");
         }
         const auto bit = [&fields, line_number](std::size_t index) {
             if (fields[index] != "0" && fields[index] != "1") {
@@ -134,7 +135,8 @@ void CsvPermissionProvider::Reload() {
         rule.remove = bit(4);
         rule.add_version = bit(5);
         rule.delete_version = bit(6);
-        rule.upload = fields.size() == 9 ? bit(8) : false;
+        rule.upload = fields.size() >= 9 ? bit(8) : false;
+        rule.rename = fields.size() == 10 ? bit(9) : false;
         const auto mode = fields[7];
         if (mode == "0") {
             rule.save_mode = SaveMode::OVERWRITE_LAST;
@@ -173,6 +175,7 @@ PermissionResult CsvPermissionProvider::Check(
             case Action::DELETE: return rule.remove;
             case Action::ADD_VERSION: return rule.add_version;
             case Action::DEL_VERSION: return rule.delete_version;
+            case Action::RENAME: return rule.rename;
         }
         return false;
     };

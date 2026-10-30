@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include "dms/permission_provider.hpp"
@@ -14,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -44,8 +46,22 @@ struct Config {
     std::filesystem::path VersionStore() const;
     std::filesystem::path Logs() const;
     std::filesystem::path PermissionsFile() const;
+    std::filesystem::path UploadAllowlistFile() const;
+    std::filesystem::path UploadDenylistFile() const;
     std::filesystem::path PendingFile() const;
     std::filesystem::path MetadataFile() const;
+};
+
+class UploadExtensionPolicy {
+public:
+    UploadExtensionPolicy(const std::filesystem::path& allowlist_file,
+                          const std::filesystem::path& denylist_file);
+    bool IsAllowed(const std::string& filename) const;
+    std::vector<std::string> AllowedExtensions() const;
+
+private:
+    std::unordered_set<std::string> allowed_;
+    std::unordered_set<std::string> denied_;
 };
 
 class AuthManager {

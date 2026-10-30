@@ -10,15 +10,23 @@ Drawing File Management System（DMS）用于在局域网内集中管理图纸�
 
 - **账号登录**：服务端验证账号和 PBKDF2-HMAC-SHA256 密码摘要；客户端不保存密码或会话令牌。
 - **目录浏览**：按权限过滤目录和文件，目录采用展开时加载。
-- **属性列表**：显示名称、修改日期、类型、大小、创建者、权限、版本、锁定用户和锁定时间；列宽可拖动调整，列也可拖动换序。日期格式为 `年-月-日 时:分:秒`，文件大小自动选择单位，权限按“读、写、删、手动增版、手动删版、上传”显示为六位 0/1 字符串，版本列使用 `vN`。没有系统消息时，消息面板会显示权限说明、双击打开/锁定与刷新提示、问题反馈邮箱。
-- **上传本地文件或文件夹**：可选择本机文件或文件夹上传到当前目录；如果选中的是文件，则目标为该文件所在目录。文件夹结构会递归创建。上传权限单独控制，不要求先打开文件或取得编辑锁。
+- **属性列表**：显示名称、修改日期、类型、大小、创建者、权限、版本、锁定用户和锁定时间；列宽可拖动调整，列也可拖动换序。日期格式为 `年-月-日 时:分:秒`，文件大小自动选择单位，权限按“读、写、删、手动增版、手动删版、上传、重命名/移动”显示为七位 0/1 字符串，版本列使用 `vN`。没有系统消息时，消息面板会显示权限说明、双击打开/锁定与刷新提示、问题反馈邮箱。
+- **上传本地文件或文件夹**：可选择本机文件或文件夹上传到当前目录；如果选中的是文件，则目标为该文件所在目录。文件夹结构会递归创建。服务端以流式方式接收，单文件上限为 4 GiB；可上传扩展名由服务端配置文件决定。
 - **图纸编辑**：打开文件时先向服务端申请编辑锁，再下载到本地临时目录并调用系统关联程序。没有获得锁时按只读方式打开。
 - **保存编辑内容**：CAD 程序保存到本地临时文件后，在客户端选择“保存当前编辑内容”，将本地修改上传回同一服务器路径。
 - **下载文件**：将服务器文件或指定历史版本保存到用户选择的本地路径。
+- **目录归档下载**：右击可读目录可下载 tar 归档；只包含当前用户有读取权限的普通文件和目录，不跟随符号链接。
 - **版本管理**：文件上传/保存产生版本快照；可查看版本、下载旧版本、手动新增版本，以及按权限删除非最新版本。
 - **目录与文件管理**：按授权新建目录、重命名/移动文件或目录、删除文件；目录删除走审批流程。
 - **占用锁提示**：名称列显示红色锁图标，悬停可查看占用者。
+- **版本冲突保护**：保存编辑副本时携带打开文件时的版本号；服务器检测到版本已变化会拒绝覆盖，并要求用户重新下载。
 - **请求编辑和临时消息**：右击文件可请求当前编辑者释放文件；文件释放和编辑请求会实时通知已登录客户端。消息不写入磁盘，只在界面固定三行区域中显示，每两秒显示一条，最多保留最近三条。
+
+## 2.1 许可证说明
+
+DMS 服务端和客户端源码采用 GPL-3.0-or-later，仓库中的 `LICENSE` 为 GPLv3 正文。Qt 库按具体 Qt 模块和发行版本自身的许可条款使用；Qt 常见模块提供 LGPLv3/GPLv3 等许可选项，但并非所有模块的选项都相同。本客户端使用 Qt Widgets 和 Qt Network，并通过动态链接 Qt。
+
+动态链接本身不会免除 GPL 或 LGPL 义务。分发 DMS 时仍需提供 DMS 对应源码及 GPLv3 许可文本；若以 LGPLv3 条款使用 Qt 库，还需按 LGPLv3 履行 Qt 库源码/修改、许可通知和用户替换或重新链接所需材料等义务。分发前应根据实际使用的 Qt 模块、构建方式和 Qt 发行包许可证逐项核对；本说明不是法律意见。
 
 ## 3. 用户操作逻辑
 
@@ -39,6 +47,12 @@ Drawing File Management System（DMS）用于在局域网内集中管理图纸�
 文件重名时，服务端以新上传内容替换当前文件内容，同时创建新版本。文件被其他用户持有未过期编辑锁时，上传会被拒绝，避免覆盖正在编辑的内容。
 
 选择文件夹时，客户端先递归创建远端目录，再逐个上传文件；每个目录和文件仍由服务端分别执行上传权限检查。遇到无法读取的本地文件或服务端拒绝时，上传会中断并显示错误。
+
+单文件上限为 4 GiB。导入和编辑保存的扩展名按服务端白名单和黑名单判断，不区分大小写；黑名单优先，另外一组代码内保护的可执行文件/脚本扩展名不可通过配置白名单放行。Qt 客户端登录后从服务端读取当前策略用于提前提示，最终校验始终由服务端执行。
+
+文件传输使用流式 I/O 和进度条，不会将整个大文件一次性装入客户端或服务端内存。服务端在 `/opt/dms/.http-tmp` 中以仅服务账号可访问的临时目录接收请求体；处理结束后会清理临时文件。非文件请求体限制为 1 MiB，上传和编辑保存请求体限制为 4 GiB。
+
+右击可读目录选择“下载文件夹为 tar…”可下载归档。归档采用 tar 格式，不增加压缩库依赖；归档只包含用户可读的普通文件/目录，不包含符号链接和无读取权限的项目。
 
 ### 3.3 编辑和锁
 
@@ -97,7 +111,7 @@ Drawing File Management System（DMS）用于在局域网内集中管理图纸�
 
 ### 4.2 `permissions.csv`
 
-服务器运行权限表为 `/opt/dms/etc/permissions.csv`。当前 9 列如下：
+服务器运行权限表为 `/opt/dms/etc/permissions.csv`。当前 10 列如下：
 
 | 列 | 含义 |
 |---|---|
@@ -110,16 +124,17 @@ Drawing File Management System（DMS）用于在局域网内集中管理图纸�
 | 手动删版 | 删除非最新版本 |
 | 保存策略 | `0` 覆盖当前版本，`1` 创建新版本 |
 | 上传 | 从用户本机导入文件；不隐含编辑权限 |
+| 重命名/移动 | 允许将文件或目录移动到目标路径；源、目标均需授权 |
 
-权限值为 `1` 授权，`0` 不授权。路径规则沿父目录继承；同一对象以最具体匹配路径为准；同一优先级以及用户所属多个组的授权按并集计算。由于规则采用授权并集，`@all` 的授权会与用户/组授权相加；不要把 `@all` 的写/上传授权用于需要组隔离的目录。
+权限值为 `1` 授权，`0` 不授权。旧的 8/9 列规则仍可读取；缺少的上传或重命名位默认拒绝。路径规则沿父目录继承；同一对象以最具体匹配路径为准；同一优先级以及用户所属多个组的授权按并集计算。由于规则采用授权并集，`@all` 的授权会与用户/组授权相加；不要把 `@all` 的写/上传/重命名授权用于需要组隔离的目录。
 
 建议对组目录明确加入 `@all` 的全拒绝行，再为该目录的组和成员添加允许行。例如：
 
 ```csv
-/g1/,@all,0,0,0,0,0,0,0
-/g1/,g1,1,1,1,1,1,1,1
-/g1/,u01,1,1,1,1,1,1,1
-/g1/,u02,1,1,1,1,1,1,1
+/g1/,@all,0,0,0,0,0,0,0,0
+/g1/,g1,1,1,1,1,1,1,1,0
+/g1/,u01,1,1,1,1,1,1,1,0
+/g1/,u02,1,1,1,1,1,1,1,0
 ```
 
 服务器会监测权限文件修改并重新加载。修改前建议备份，且确保 CSV 的字段数和每项权限值有效。
@@ -128,7 +143,7 @@ Drawing File Management System（DMS）用于在局域网内集中管理图纸�
 
 `config.json` 中 `"admin": false` 表示该账户没有被配置标记为管理员；当前代码不会依据此字段授予或撤销操作权限。`admin: true` 同样只是账户元数据，不会自动绕过 `permissions.csv`，也不提供客户端用户管理或审批功能。账户在 Qt 客户端可访问的文件及操作完全由权限 CSV 决定。
 
-当前部署的 `/,admin,1,0,0,0,0,0,0` 规则使名为 `admin` 的账号沿路径继承读取权限，但不授予写、删、手动增版、手动删版或上传权限。因此它可在客户端浏览其有读权限的文件，但不能通过应用添加用户、编辑审批队列或执行敏感系统操作。账户添加和审批队列维护由系统操作者在服务器侧处理。
+当前部署的 `/,admin,1,0,0,0,0,0,0,0` 规则使名为 `admin` 的账号沿路径继承读取权限，但不授予写、删、手动增版、手动删版、上传或重命名权限。因此它可在客户端浏览其有读权限的文件，但不能通过应用添加用户、编辑审批队列或执行敏感系统操作。账户添加和审批队列维护由系统操作者在服务器侧处理。
 
 ## 5. 连接配置与 IP/端口变更
 
@@ -171,7 +186,27 @@ Drawing File Management System（DMS）用于在局域网内集中管理图纸�
 
 `server-connection.json` 只保存地址，不保存密码或 token；可以分发给客户端。`config.json` 包含密码摘要与内部 refresh token，应保持受限权限，不要分发或提交到版本库。
 
-### 5.3 Cron、内部刷新和 CA 信任
+### 5.3 上传扩展名策略
+
+服务端启动时从以下配置文件加载上传类型策略：
+
+- `/opt/dms/etc/upload-allowlist.txt`：允许的扩展名，每行一个，例如 `dwg`；可写成 `.dwg`，大小写不敏感。
+- `/opt/dms/etc/upload-denylist.txt`：额外拒绝的扩展名，格式相同。扩展名只要在黑名单中就会拒绝，即使它同时出现在白名单。
+
+两份文件都必须存在且为普通文件。白名单不能为空；黑名单可以只有注释/空行。空行和以 `#` 开始的注释行会被忽略。策略文件缺失、不可读或格式错误时，服务端会拒绝启动，而不是退回到默认放行。客户端通过登录后的 `/api/upload-policy` 获取有效白名单，文件夹上传会先检查全部文件；即使客户端被绕过，服务端仍会在接收文件前和处理时再次校验。
+
+服务端还包含不可由配置覆盖的危险扩展名保护规则：`app,apk,asp,aspx,bash,bat,cgi,cmd,com,deb,desktop,dylib,dll,exe,fish,hta,jar,js,lnk,msi,php,pl,ps1,psm1,py,pyw,rb,reg,rpm,scr,sh,so,vbs,wsf,zsh`。修改白/黑名单不会解除这些保护。修改名单后，重启服务生效：
+
+```sh
+sudoedit /opt/dms/etc/upload-allowlist.txt
+sudoedit /opt/dms/etc/upload-denylist.txt
+systemctl --user restart dms-server
+systemctl --user status dms-server
+```
+
+配置文件应仅允许系统操作者修改，并确保服务账号有读取权限。项目模板位于 [`etc/upload-allowlist.txt`](./etc/upload-allowlist.txt) 和 [`etc/upload-denylist.txt`](./etc/upload-denylist.txt)；首次部署时将它们复制到 `/opt/dms/etc/`，不要在升级时覆盖已有的现场策略。
+
+### 5.4 Cron、内部刷新和 CA 信任
 
 `dms-server` 与 `dms-cron` 是两个独立进程。每日 cron 任务处理 `/opt/dms/admin/pending_delete.csv` 中已批准或拒绝的目录删除记录后，需要通知正在运行的服务端重新加载审批状态和文件索引。cron 因而会连接到 `https://127.0.0.1:<port>/api/internal/refresh`，并在请求头中附带 `config.json` 的 `refresh_token`。服务端仅在 token 匹配时接受刷新请求。
 
@@ -237,12 +272,37 @@ CA 证书是公钥证书，可以分发给客户端；服务端私钥必须保�
 - **DMS Server**：C++20、Boost.Asio/Beast、OpenSSL、nlohmann-json，提供 HTTPS API、认证、权限检查、文件存储、版本和锁。
 - **DMS Cron**：处理待审批删除记录，并通过 loopback HTTPS 请求通知服务端刷新索引。
 - **Qt Client**：Qt 6 Widgets + Network，调用 API、展示文件树、管理本地文件选择和编辑流程。
+- **Core tests**：覆盖权限继承/并集、密码哈希、配置解析、待审批删除和文件树索引等基础行为。
 
-### 6.2 文件和版本存储
+### 6.2 常用 API
+
+| API | 用途 |
+|---|---|
+| `POST /api/login` | 登录并取得 bearer token |
+| `GET /api/list?path=...` | 列出当前用户可读的子节点及元数据、版本数、锁持有者 |
+| `POST /api/file/open` | 打开文件并申请编辑锁；已被他人持有时返回只读状态 |
+| `POST /api/file/heartbeat` | 以 `{"paths":[...]}` 批量续期；返回成功和失效路径 |
+| `POST /api/file/close` | 释放当前用户持有的锁 |
+| `POST /api/file/request-edit` | 向在线客户端发布编辑请求消息 |
+| `GET /api/notifications` | 取出当前登录会话的临时通知 |
+| `POST /api/logout` | 注销会话并释放该用户持有的编辑锁 |
+| `GET /api/file?path=...` | 下载当前文件 |
+| `GET /api/archive?path=...` | 流式生成该目录的 tar 归档，仅包含用户可读项目 |
+| `PUT /api/file?path=...` | 在编辑锁有效且具备写权限、`If-Match: "rev_N"` 与当前版本一致时保存已打开文件 |
+| `POST /api/upload?path=...&name=...` | 按上传权限导入本地文件并建立版本 |
+| `POST /api/upload-directory?path=...` | 按上传权限创建文件夹上传所需目录 |
+| `GET /api/upload-policy` | 返回当前会话对应的有效扩展名白名单 |
+| `GET /api/file/versions?path=...` | 读取版本历史 |
+| `POST /api/rename` | 具备重命名/移动权限时移动文件或目录；任何被移动路径存在活动锁时拒绝 |
+
+除登录和内部刷新 API 外，API 请求需要有效的 bearer token。
+
+### 6.3 文件和版本存储
 
 - 当前文件存放在 `/opt/dms/filestore/<逻辑路径>`。
 - 版本存放在 `/opt/dms/version_store/<逻辑父目录>/<文件名>/rev_N.<扩展名>`。
 - `/opt/dms/etc/file_metadata.json` 记录文件创建者元数据。
+- `/opt/dms/.http-tmp` 暂存流式 HTTP 请求体和临时归档；由服务端创建并设为仅服务账号可访问，正常处理完成后清理。
 - 审计日志写入 `/opt/dms/logs`。
 - 待审批删除记录位于文件库之外的 `/opt/dms/admin/pending_delete.csv`，只应授权给受信任的系统操作者。获准编辑者可批准递归删除目录。
 
@@ -260,7 +320,7 @@ ctest --test-dir build --output-on-failure
 cmake --install build --prefix /opt/dms
 ```
 
-部署配置文件时不要覆盖现有生产配置。修改 server `config.json` 后重启服务：
+首次部署时，将 `etc/upload-allowlist.txt` 和 `etc/upload-denylist.txt` 放入 `/opt/dms/etc/`，并确保服务账号可读、仅系统操作者可写；服务端缺少这两份策略文件时会拒绝启动。部署其他配置文件时不要覆盖现有生产配置。修改 server `config.json` 或扩展名策略后重启服务：
 
 ```sh
 systemctl --user restart dms-server
@@ -280,15 +340,22 @@ cmake --build qt-client/build --config Release
 ```
 
 Qt build 输出目录会带有 `server-connection.json`。发布时将该 JSON 与 exe 一起分发，并确保配置中的 TLS 地址与证书一致。
+Windows CMake 目标使用 GUI 子系统，构建的 exe 不附带控制台窗口。
 
 ### 7.3 备份建议
 
-定期备份 `config.json`、`permissions.csv`、`/opt/dms/admin/pending_delete.csv`、TLS 证书/CA、TLS 私钥、`filestore` 和 `version_store`。备份包含敏感凭据的配置时，应限制访问并采用加密存储。恢复时先停止服务，再恢复数据和配置，并检查文件所有者与权限。
+定期备份 `config.json`、`permissions.csv`、`upload-allowlist.txt`、`upload-denylist.txt`、`/opt/dms/admin/pending_delete.csv`、TLS 证书/CA、TLS 私钥、`filestore` 和 `version_store`。备份包含敏感凭据的配置时，应限制访问并采用加密存储。恢复时先停止服务，再恢复数据和配置，并检查文件所有者与权限。
 
 ## 8. 代码入口索引
 
-- 服务端 API、锁状态、heartbeat 和上传逻辑：[`src/server_main.cpp`](./src/server_main.cpp)
+- 服务端 API 路由、权限、锁、版本冲突和上传逻辑：[`src/server_api.cpp`](./src/server_api.cpp)
+- 服务端 HTTP/TLS 会话与监听器：[`src/server_http.cpp`](./src/server_http.cpp)
+- 服务端运行时锁/通知状态和文件监控：[`src/server_internal.hpp`](./src/server_internal.hpp)、[`src/server_runtime.cpp`](./src/server_runtime.cpp)
+- 服务端进程启动、TLS 初始化和信号处理：[`src/server_main.cpp`](./src/server_main.cpp)
 - 文件锁分片锁实现与存储索引类型：[`include/dms/storage.hpp`](./include/dms/storage.hpp)、[`src/storage.cpp`](./src/storage.cpp)
+- 上传扩展名策略模板：[`etc/upload-allowlist.txt`](./etc/upload-allowlist.txt)、[`etc/upload-denylist.txt`](./etc/upload-denylist.txt)
 - CSV 权限规则解析和匹配：[`include/dms/permission_provider.hpp`](./include/dms/permission_provider.hpp)、[`src/permission_provider.cpp`](./src/permission_provider.cpp)
-- Qt 客户端事件、上传、列表和锁图标：[`qt-client/src/main_window.cpp`](./qt-client/src/main_window.cpp)、[`qt-client/src/main_window.hpp`](./qt-client/src/main_window.hpp)
+- Qt 客户端共享辅助函数：[`qt-client/src/main_window_internal.h`](./qt-client/src/main_window_internal.h)
+- Qt 客户端网络、会话、树、文件、菜单、版本和通知：[`qt-client/src/main_window_network.cpp`](./qt-client/src/main_window_network.cpp)、[`qt-client/src/main_window_session.cpp`](./qt-client/src/main_window_session.cpp)、[`qt-client/src/main_window_tree.cpp`](./qt-client/src/main_window_tree.cpp)、[`qt-client/src/main_window_files.cpp`](./qt-client/src/main_window_files.cpp)、[`qt-client/src/main_window_menu.cpp`](./qt-client/src/main_window_menu.cpp)、[`qt-client/src/main_window_versions.cpp`](./qt-client/src/main_window_versions.cpp)、[`qt-client/src/main_window_notifications.cpp`](./qt-client/src/main_window_notifications.cpp)
 - 连接配置模板：[`etc/server-connection.json`](./etc/server-connection.json)
+- 基础测试：[`tests/core_tests.cpp`](./tests/core_tests.cpp)

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include <QHash>
@@ -44,6 +45,7 @@ private:
         bool lock_held = false;
         QString occupied_by;
         QString locked_at;
+        int base_version = 0;
     };
 
     struct FolderUploadJob {
@@ -56,6 +58,7 @@ private:
     };
 
     using ReplyHandler = std::function<void(QNetworkReply*)>;
+    using TransferHandler = std::function<void(bool)>;
 
     void connectToServer();
     void logout();
@@ -64,7 +67,9 @@ private:
     void addNode(QTreeWidgetItem* parent, const QJsonObject& node);
     void openFile(QTreeWidgetItem* item, const QString& application = {});
     void downloadCurrent(QTreeWidgetItem* item);
+    void downloadArchive(QTreeWidgetItem* item);
     void uploadLocalFile(QTreeWidgetItem* item);
+    bool isAllowedUploadExtension(const QString& path) const;
     void uploadFolder(QTreeWidgetItem* item, const QString& source_directory);
     void uploadNextFolderDirectory(
         const std::shared_ptr<FolderUploadJob>& job);
@@ -90,7 +95,15 @@ private:
     QNetworkRequest makeRequest(const QUrl& url) const;
     void sendRequest(const QByteArray& method, const QUrl& url,
                      const QByteArray& body, const QByteArray& content_type,
-                     ReplyHandler handler);
+                     ReplyHandler handler,
+                     const QList<QPair<QByteArray, QByteArray>>& headers = {});
+    void sendFileRequest(
+        const QByteArray& method, const QUrl& url, const QString& source,
+        const QByteArray& content_type, const QString& operation,
+        ReplyHandler handler,
+        const QList<QPair<QByteArray, QByteArray>>& headers = {});
+    void downloadToFile(const QUrl& url, const QString& destination,
+                       const QString& operation, TransferHandler handler);
     void showReplyError(QNetworkReply* reply, const QString& operation);
     QTreeWidgetItem* selectedItem() const;
     void setItemLockState(const QString& path, const QString& occupied_by,
@@ -113,9 +126,12 @@ private:
     QUrl base_url_;
     QString token_;
     QString username_;
+    QStringList allowed_upload_extensions_;
+    bool upload_policy_loaded_ = false;
     QQueue<QString> notification_queue_;
     QStringList displayed_notifications_;
     bool notifications_request_in_flight_ = false;
+    bool heartbeat_request_in_flight_ = false;
     quint64 next_children_request_id_ = 0;
     QHash<QString, quint64> children_requests_;
     QHash<QString, OpenDocument> open_documents_;
