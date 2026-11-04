@@ -81,6 +81,13 @@ void MainWindow::loadChildren(QTreeWidgetItem* parent) {
                         0, PermissionsRole,
                         NormalizePermissionBits(
                             document.object().value("directory_perms").toString()));
+                    current_parent->setText(
+                        5, PermissionDisplayText(
+                               NormalizePermissionBits(
+                                   document.object()
+                                       .value("directory_perms").toString()),
+                               document.object()
+                                   .value("directory_save_mode").toInt()));
                     for (const auto& node : document.object().value("nodes").toArray()) {
                         if (node.isObject()) {
                             addNode(current_parent, node.toObject());
@@ -114,6 +121,7 @@ void MainWindow::addNode(QTreeWidgetItem* parent, const QJsonObject& node) {
     const auto version = node.value("version").toString();
     const auto locked_by = node.value("locked_by").toString();
     const auto locked_at = node.value("locked_at").toString();
+    const int save_mode = node.value("save_mode").toInt();
     item->setText(0, name);
     item->setText(1, modified.isEmpty() ? tr("—") : modified);
     const QString extension = QFileInfo(name).suffix().toUpper();
@@ -125,7 +133,7 @@ void MainWindow::addNode(QTreeWidgetItem* parent, const QJsonObject& node) {
     const auto size_bytes = size.toLongLong(&size_ok);
     item->setText(3, size_ok ? FormatFileSize(size_bytes) : tr("—"));
     item->setText(4, owner.isEmpty() ? tr("—") : owner);
-    item->setText(5, permissions);
+    item->setText(5, PermissionDisplayText(permissions, save_mode));
     item->setText(6, version.isEmpty() ? tr("—") : version);
     item->setText(7, locked_by);
     item->setText(8, locked_at.isEmpty() ? tr("—") : locked_at);

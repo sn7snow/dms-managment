@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "dms/permission_provider.hpp"
 #include "dms/storage.hpp"
+#include "../src/server_internal.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -47,6 +48,11 @@ int main() {
         Require(multi_group_write.allowed, "Permissions from groups should be unioned");
         Require(multi_group_write.save_mode == dms::SaveMode::CREATE_NEW,
                 "Writable CREATE_NEW policy should be preserved");
+        const auto overwrite_policy = permissions.Check(
+            "alice", {"design"}, "/drawings/plan.dwg", dms::Action::WRITE);
+        Require(overwrite_policy.allowed &&
+                    overwrite_policy.save_mode == dms::SaveMode::OVERWRITE_LAST,
+                "Save policy 0 should overwrite the current version");
         Require(permissions.Check("alice", {"design"}, "/drawings/new.dwg",
                                   dms::Action::UPLOAD).allowed,
                 "Upload permission should be independently granted");
@@ -67,6 +73,8 @@ int main() {
             rejected = true;
         }
         Require(rejected, "Dot segments must be rejected");
+        Require(dms::Utf8Path("图纸.dwg").u8string() == u8"图纸.dwg",
+                "UTF-8 paths should retain their Unicode filename");
 
         const std::string salt = "00112233445566778899aabbccddeeff";
         const auto hash = dms::AuthManager::HashPassword("test-password", salt);
@@ -74,6 +82,33 @@ int main() {
                 "PBKDF2 password verification should succeed");
         Require(!dms::AuthManager::VerifyPassword("wrong-password", salt, hash),
                 "PBKDF2 password verification should reject a wrong password");
+        dms::AuthManager auth({{"qa", salt, hash, {"qa"}, false}});
+        const auto login = auth.Login("qa", "test-password");
+        Require(login.has_value(), "Valid credentials should create a session");
+        const auto token = login->at("token").get<std::string>();
+        const auto session = auth.Resolve(token);
+        Require(session && session->user == "qa",
+                "A newly created session should resolve to its user");
+        auth.Logout(token);
+        Require(!auth.Resolve(token), "Logout should revoke the session");
+        for (int i = 0; i < 5; ++i) {
+            Require(!auth.Login("qa", "wrong-password"),
+                    "Invalid credentials should be rejected");
+        }
+        Require(!auth.Login("qa", "test-password"),
+                "Repeated failures should temporarily rate-limit the account");
+
+        dms::server::NotificationBus notifications;
+        notifications.Subscribe("session");
+        for (int i = 0; i < 150; ++i) {
+            notifications.Publish(std::to_string(i));
+        }
+        const auto messages = notifications.Take("session");
+        Require(messages.size() == 100,
+                "Notification mailboxes should retain at most 100 messages");
+        Require(messages.front().at("text") == "50" &&
+                    messages.back().at("text") == "149",
+                "Notification overflow should discard the oldest messages");
 
         const auto config_file = root / "etc" / "config.json";
         const auto base_config = nlohmann::json{

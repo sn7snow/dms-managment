@@ -1,0 +1,9 @@
+[Unit]
+Description=Process DMS deletion approvals
+After=dms-server.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dms
+ExecStart=/opt/dms/bin/dms-cron --config /opt/dms/etc/config.json
+UMask=0027

@@ -180,9 +180,9 @@ void MainWindow::renameNode(QTreeWidgetItem* item) {
                         }
                     }
                     reloadParent(parent);
-                    const int separator = to.lastIndexOf('/');
+                    const int to_separator = to.lastIndexOf('/');
                     const QString destination_parent =
-                        separator <= 0 ? "/" : to.left(separator);
+                        to_separator <= 0 ? "/" : to.left(to_separator);
                     if (destination_parent != parent) {
                         auto* destination = nodes_.value(destination_parent, nullptr);
                         if (destination != nullptr) {

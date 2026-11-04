@@ -10,6 +10,7 @@
 #include <boost/beast/http/message_generator.hpp>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -19,6 +20,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -66,7 +68,7 @@ public:
         std::lock_guard lock(mutex_);
         for (auto& [token, messages] : mailboxes_) {
             (void)token;
-            messages.push_back(Json{{"type", "message"}, {"text", message}});
+            Push(messages, Json{{"type", "message"}, {"text", message}});
         }
     }
 
@@ -75,7 +77,7 @@ public:
         std::lock_guard lock(mutex_);
         for (auto& [token, messages] : mailboxes_) {
             (void)token;
-            messages.push_back(
+            Push(messages,
                 Json{{"type", "lock"},
                      {"path", path},
                      {"user", user},
@@ -101,9 +103,24 @@ public:
     }
 
 private:
+    static constexpr std::size_t kMaxMailbox = 100;
+
+    static void Push(std::deque<Json>& box, Json message) {
+        if (box.size() >= kMaxMailbox) box.pop_front();
+        box.push_back(std::move(message));
+    }
+
     std::mutex mutex_;
     std::unordered_map<std::string, std::deque<Json>> mailboxes_;
 };
+
+std::string WriteRenameIntent(const Config& config, const std::string& from,
+                              const std::string& to, bool has_versions);
+void CompleteRenameIntent(const Config& config, const std::string& id,
+                          bool recovered = false);
+void RecoverRenameIntents(const Config& config);
+void DurableRename(const std::filesystem::path& from,
+                   const std::filesystem::path& to);
 
 struct Runtime {
     Config config;
@@ -131,6 +148,18 @@ struct Runtime {
         std::filesystem::create_directories(config.FileStore());
         std::filesystem::create_directories(config.VersionStore());
         std::filesystem::create_directories(config.Logs());
+#ifndef _WIN32
+        // 审计、配置与删除队列都落在这些目录里，收紧到仅属主可用。
+        const std::array<std::filesystem::path, 3> restricted = {
+            config.Logs(), config.Etc(), config.PendingFile().parent_path()};
+        for (const auto& directory : restricted) {
+            std::error_code permission_error;
+            std::filesystem::permissions(directory,
+                                         std::filesystem::perms::owner_all,
+                                         std::filesystem::perm_options::replace,
+                                         permission_error);
+        }
+#endif
         const auto temporary = config.root / ".http-tmp";
         const auto temporary_status = std::filesystem::symlink_status(temporary);
         if (std::filesystem::is_symlink(temporary_status)) {
@@ -146,6 +175,16 @@ struct Runtime {
         std::filesystem::permissions(
             temporary, std::filesystem::perms::owner_all,
             std::filesystem::perm_options::replace);
+        {
+            // 清理上次非正常退出残留的会话目录与归档，防止临时区慢慢吃满磁盘。
+            std::error_code scan_error;
+            for (const auto& leftover :
+                 std::filesystem::directory_iterator(temporary, scan_error)) {
+                std::error_code remove_error;
+                std::filesystem::remove_all(leftover.path(), remove_error);
+            }
+        }
+        RecoverRenameIntents(config);
         tree.Build(config.FileStore());
     }
 

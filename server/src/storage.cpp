@@ -2,9 +2,11 @@
 #include "dms/storage.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <cctype>
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <iomanip>
@@ -19,14 +21,11 @@
 
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace dms {
 namespace {
-
-std::filesystem::path Utf8Path(const std::string& value) {
-    return std::filesystem::u8path(value);
-}
 
 class PendingFileLock {
 public:
@@ -157,7 +156,27 @@ bool IsProtectedExtension(const std::string& extension) {
 
 }  // namespace
 
+std::filesystem::path Utf8Path(const std::string& value) {
+    return std::filesystem::path(std::u8string(
+        reinterpret_cast<const char8_t*>(value.data()), value.size()));
+}
+
 Config Config::Load(const std::filesystem::path& file) {
+#ifndef _WIN32
+    // 配置里有口令摘要与内部 refresh token；被同组/其他用户可写等于可被提权。
+    struct stat info{};
+    if (::stat(file.c_str(), &info) == 0) {
+        if ((info.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+            throw std::runtime_error(
+                "Config file must not be writable by group or others: " +
+                file.string());
+        }
+        if ((info.st_mode & (S_IRGRP | S_IROTH)) != 0) {
+            std::cerr << "Warning: config file is readable by group or others: "
+                      << file.string() << '\n';
+        }
+    }
+#endif
     std::ifstream input(file);
     if (!input) {
         throw std::runtime_error("Cannot open config file: " + file.string());
@@ -184,6 +203,28 @@ Config Config::Load(const std::filesystem::path& file) {
     config.refresh_token = JsonString(document, "refresh_token");
     if (config.refresh_token.size() < 32) {
         throw std::runtime_error("refresh_token must contain at least 32 characters");
+    }
+    {
+        // 模板里的占位值长度刚好达标，必须显式拦住，否则等于用公开常量当内部令牌。
+        std::string upper = config.refresh_token;
+        std::transform(upper.begin(), upper.end(), upper.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::toupper(ch));
+                       });
+        if (upper.find("REPLACE") != std::string::npos ||
+            upper.find("CHANGEME") != std::string::npos ||
+            upper.find("TODO") != std::string::npos) {
+            throw std::runtime_error(
+                "refresh_token still contains a placeholder value; generate one "
+                "with: dms-server --hash-password or `openssl rand -hex 32`");
+        }
+        if (std::all_of(config.refresh_token.begin(), config.refresh_token.end(),
+                        [first = config.refresh_token.front()](char ch) {
+                            return ch == first;
+                        })) {
+            std::cerr << "Warning: refresh_token looks low-entropy; generate a "
+                         "random value with `openssl rand -hex 32`\n";
+        }
     }
     if (document.contains("tls_cert_file")) {
         if (!document.at("tls_cert_file").is_string()) {
@@ -360,7 +401,8 @@ std::string MakeRandomToken() {
     return ToHex(bytes.data(), bytes.size());
 }
 
-AuthManager::AuthManager(std::vector<UserAccount> users) {
+AuthManager::AuthManager(std::vector<UserAccount> users)
+    : dummy_salt_(MakeRandomToken()), dummy_hash_(MakeRandomToken()) {
     for (auto& user : users) {
         const auto username = user.user;
         if (!users_.emplace(username, std::move(user)).second) {
@@ -370,16 +412,54 @@ AuthManager::AuthManager(std::vector<UserAccount> users) {
 }
 
 std::optional<nlohmann::json> AuthManager::Login(const std::string& user,
-                                                 const std::string& password) {
+                                                 const std::string& password,
+                                                 const std::string& client_ip) {
+    // 退避键同时包含来源地址：攻击者无法从自己的机器把某个账号永久锁死。
+    const std::string throttle_key = user + '\n' + client_ip;
+    const auto now = std::chrono::steady_clock::now();
+    {
+        std::lock_guard lock(mutex_);
+        const auto failure = failures_.find(throttle_key);
+        if (failure != failures_.end() && failure->second.count >= 5 &&
+            now < failure->second.until) {
+            return std::nullopt;
+        }
+    }
+
     const auto found = users_.find(user);
-    if (found == users_.end() ||
-        !VerifyPassword(password, found->second.pass_salt, found->second.pass_hash)) {
+    const bool password_ok = VerifyPassword(
+        password,
+        found == users_.end() ? dummy_salt_ : found->second.pass_salt,
+        found == users_.end() ? dummy_hash_ : found->second.pass_hash);
+    if (found == users_.end() || !password_ok) {
+        const auto failed_at = std::chrono::steady_clock::now();
+        std::lock_guard lock(mutex_);
+        auto& failure = failures_[throttle_key];
+        failure.last_failure = failed_at;
+        if (failure.count < 10) ++failure.count;
+        if (failure.count >= 5) {
+            const int exponent = std::min(failure.count - 5, 5);
+            // 上限 60 秒：够挡住在线爆破，不足以变成对受害者的长期拒绝服务。
+            const int delay_seconds = std::min(60, 15 * (1 << exponent));
+            failure.until = failed_at + std::chrono::seconds(delay_seconds);
+        } else {
+            failure.until = failed_at + std::chrono::minutes(30);
+        }
+        // 失败表必须有硬上限：用户名长度已被调用方限制，但请求数不受限。
+        if (failures_.size() > kMaxFailureEntries) {
+            failures_.erase(failures_.begin());
+        }
         return std::nullopt;
     }
+
     const auto token = MakeRandomToken();
     {
         std::lock_guard lock(mutex_);
-        tokens_.insert_or_assign(token, user);
+        // 成功登录只清理本来源的计数，不影响其他来源。
+        failures_.erase(throttle_key);
+        tokens_.insert_or_assign(
+            token, Session{user, std::chrono::steady_clock::now() +
+                                     std::chrono::hours(8)});
     }
     return nlohmann::json{{"token", token},
                           {"user", user},
@@ -392,7 +472,10 @@ std::optional<UserAccount> AuthManager::Resolve(const std::string& token) const 
     if (session == tokens_.end()) {
         return std::nullopt;
     }
-    const auto user = users_.find(session->second);
+    if (std::chrono::steady_clock::now() >= session->second.expire_at) {
+        return std::nullopt;
+    }
+    const auto user = users_.find(session->second.user);
     return user == users_.end() ? std::nullopt
                                 : std::optional<UserAccount>(user->second);
 }
@@ -400,6 +483,28 @@ std::optional<UserAccount> AuthManager::Resolve(const std::string& token) const 
 void AuthManager::Logout(const std::string& token) {
     std::lock_guard lock(mutex_);
     tokens_.erase(token);
+}
+
+std::vector<std::string> AuthManager::Sweep() {
+    std::vector<std::string> expired_tokens;
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard lock(mutex_);
+    for (auto it = tokens_.begin(); it != tokens_.end();) {
+        if (now >= it->second.expire_at) {
+            expired_tokens.push_back(it->first);
+            it = tokens_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = failures_.begin(); it != failures_.end();) {
+        if (now - it->second.last_failure >= std::chrono::minutes(30)) {
+            it = failures_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return expired_tokens;
 }
 
 AuditLog::AuditLog(std::filesystem::path directory)
@@ -432,12 +537,36 @@ std::string UtcTimestamp() {
     return output.str();
 }
 
+namespace {
+// 安全相关的审计事件不允许被业务流量挤掉：宁可让调用方短暂等待，也要留下痕迹。
+bool IsCriticalAuditOperation(const std::string& operation) {
+    return operation == "LOGIN" || operation == "LOGOUT" ||
+           operation == "DELETE" || operation == "PENDING_DEL" ||
+           operation == "SAVE" || operation == "UPLOAD";
+}
+}  // namespace
+
 void AuditLog::Write(std::string user, std::string ip, std::string operation,
                      std::string path, std::string detail) {
+    const bool critical = IsCriticalAuditOperation(operation);
     {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (stopping_) {
-            throw std::runtime_error("Audit logger is stopping");
+            return;
+        }
+        if (queue_.size() >= kMaxQueue) {
+            if (critical) {
+                // 等待消费者腾出空间，超时后才计入丢弃。
+                if (!ready_.wait_for(lock, std::chrono::milliseconds(200), [this] {
+                        return queue_.size() < kMaxQueue;
+                    })) {
+                    ++dropped_;
+                    return;
+                }
+            } else {
+                ++dropped_;
+                return;
+            }
         }
         queue_.push_back({{"ts", UtcTimestamp()}, {"user", std::move(user)},
                           {"ip", std::move(ip)}, {"op", std::move(operation)},
@@ -446,29 +575,71 @@ void AuditLog::Write(std::string user, std::string ip, std::string operation,
     ready_.notify_one();
 }
 
+namespace {
+// 审计记录只追加、仅属主可读写；任何写失败都不能影响调用方。
+void AppendAuditLine(const std::filesystem::path& file, const std::string& line) {
+    const int descriptor =
+        ::open(file.c_str(), O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC, 0600);
+    if (descriptor < 0) {
+        throw std::runtime_error("Cannot open audit log: " + file.string());
+    }
+    std::size_t written = 0;
+    while (written < line.size()) {
+        const auto result = ::write(descriptor, line.data() + written,
+                                    line.size() - written);
+        if (result < 0 && errno == EINTR) continue;
+        if (result <= 0) {
+            const int error = errno;
+            ::close(descriptor);
+            throw std::runtime_error("Cannot append audit log: " +
+                                     std::string(std::strerror(error)));
+        }
+        written += static_cast<std::size_t>(result);
+    }
+    ::fsync(descriptor);
+    ::close(descriptor);
+}
+}  // namespace
+
 void AuditLog::Run() {
     for (;;) {
-        nlohmann::json entry;
-        {
-            std::unique_lock lock(mutex_);
-            ready_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
-            if (queue_.empty() && stopping_) {
-                return;
+        // 这是独立线程：任何异常都必须就地消化，绝不允许逃到线程入口。
+        try {
+            nlohmann::json entry;
+            {
+                std::unique_lock lock(mutex_);
+                ready_.wait(lock, [this] {
+                    return stopping_ || !queue_.empty() || dropped_ != 0;
+                });
+                if (queue_.empty() && dropped_ == 0 && stopping_) {
+                    return;
+                }
+                if (dropped_ != 0) {
+                    entry = {{"ts", UtcTimestamp()},
+                             {"user", "system"},
+                             {"ip", ""},
+                             {"op", "AUDIT_QUEUE_DROPPED"},
+                             {"path", ""},
+                             {"detail", std::to_string(dropped_) +
+                                            " audit entries dropped"}};
+                    dropped_ = 0;
+                } else {
+                    entry = std::move(queue_.front());
+                    queue_.pop_front();
+                }
             }
-            entry = std::move(queue_.front());
-            queue_.pop_front();
-        }
-        const auto date = entry.at("ts").get<std::string>().substr(0, 10);
-        const auto file = directory_ / ("audit-" + date + ".jsonl");
-        std::ofstream output(file, std::ios::binary | std::ios::app);
-        if (!output) {
-            std::cerr << "Unable to open audit log: " << file << '\n';
-            continue;
-        }
-        output << entry.dump() << '\n';
-        output.flush();
-        if (!output) {
-            std::cerr << "Unable to write audit log: " << file << '\n';
+            // replace：即使路径里出现非法 UTF-8 也能落盘，绝不抛异常。
+            const auto serialized = entry.dump(
+                -1, ' ', false, nlohmann::json::error_handler_t::replace);
+            const auto timestamp = entry.value("ts", std::string{});
+            const auto date = timestamp.size() >= 10 ? timestamp.substr(0, 10)
+                                                     : std::string("unknown");
+            const auto file = directory_ / ("audit-" + date + ".jsonl");
+            AppendAuditLine(file, serialized + "\n");
+        } catch (const std::exception& error) {
+            std::cerr << "Audit worker recovered: " << error.what() << '\n';
+        } catch (...) {
+            std::cerr << "Audit worker recovered from unknown exception\n";
         }
     }
 }
@@ -493,9 +664,9 @@ void PendingDeleteStore::Reload() {
         }
         const auto fields = ParseCsvRow(line);
         if (fields.size() != 4) {
-            throw std::runtime_error("pending_delete.csv line " +
-                                     std::to_string(line_number) +
-                                     " must contain 4 columns");
+            std::cerr << "Ignoring malformed pending_delete.csv line "
+                      << line_number << '\n';
+            continue;
         }
         int status = -1;
         const auto parsed = std::from_chars(fields[2].data(),
@@ -512,7 +683,14 @@ void PendingDeleteStore::Reload() {
                       << line_number << '\n';
             continue;
         }
-        next.push_back({fields[0], NormalizeLogicalPath(fields[1]), status, fields[3]});
+        try {
+            next.push_back(
+                {fields[0], NormalizeLogicalPath(fields[1]), status, fields[3]});
+        } catch (const std::exception& error) {
+            // 跳过坏记录，别让一条脏数据把服务启动卡死。
+            std::cerr << "Ignoring pending_delete.csv line " << line_number << ": "
+                      << error.what() << '\n';
+        }
     }
     std::lock_guard lock(mutex_);
     records_ = std::move(next);

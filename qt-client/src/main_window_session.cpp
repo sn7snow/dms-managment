@@ -73,7 +73,7 @@ MainWindow::MainWindow(QWidget* parent)
     tree_->setColumnWidth(2, 100);
     tree_->setColumnWidth(3, 100);
     tree_->setColumnWidth(4, 100);
-    tree_->setColumnWidth(5, 100);
+    tree_->setColumnWidth(5, 240);
     tree_->setColumnWidth(6, 80);
     tree_->setColumnWidth(7, 100);
     tree_->setColumnWidth(8, 150);

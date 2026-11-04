@@ -75,7 +75,7 @@ constexpr int PermissionCount = 7;
 
 [[maybe_unused]] QStringList DefaultNotifications() {
     return {
-        QObject::tr("权限标志：读，写，删，手动增版，手动删版，上传，重命名/移动。"),
+        QObject::tr("权限标志：读，写，删，手动增版，手动删版，上传，重命名/移动；保存策略：0 覆盖当前版本，1 新增版本。"),
         QObject::tr("双击打开文件就立即锁定，不用时请手动释放锁，点击刷新会折叠文件夹，请记住你的文件位置。"),
         QObject::tr("bug请报邮箱1129111763@qq.com。")};
 }
@@ -87,6 +87,11 @@ constexpr int PermissionCount = 7;
         if (bit != '0' && bit != '1') return QString(PermissionCount, '0');
     }
     return bits;
+}
+
+[[maybe_unused]] QString PermissionDisplayText(const QString& bits,
+                                               int save_mode) {
+    return bits + QString::number(save_mode);
 }
 
 [[maybe_unused]] QString NodePath(const QTreeWidgetItem* item) {

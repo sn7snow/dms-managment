@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 
 namespace dms {
 namespace {
@@ -47,9 +49,48 @@ std::vector<std::string> ParseCsvRow(const std::string& row) {
     return fields;
 }
 
+namespace {
+// 非法 UTF-8 会让 nlohmann::json::dump() 抛 type_error.316，进而打穿审计线程。
+// 在唯一的路径入口拒绝它，是最省事也最彻底的做法。
+bool IsValidUtf8(std::string_view text) {
+    std::size_t index = 0;
+    while (index < text.size()) {
+        const auto lead = static_cast<unsigned char>(text[index]);
+        std::size_t continuation = 0;
+        if (lead <= 0x7F) {
+            ++index;
+            continue;
+        } else if ((lead & 0xE0) == 0xC0) {
+            continuation = 1;
+        } else if ((lead & 0xF0) == 0xE0) {
+            continuation = 2;
+        } else if ((lead & 0xF8) == 0xF0) {
+            continuation = 3;
+        } else {
+            return false;
+        }
+        if (index + continuation >= text.size()) return false;
+        for (std::size_t offset = 1; offset <= continuation; ++offset) {
+            if ((static_cast<unsigned char>(text[index + offset]) & 0xC0) !=
+                0x80) {
+                return false;
+            }
+        }
+        index += continuation + 1;
+    }
+    return true;
+}
+}  // namespace
+
 std::string NormalizeLogicalPath(const std::string& path) {
     if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos) {
         throw std::invalid_argument("Logical path must begin with '/'");
+    }
+    if (path.size() > 4096) {
+        throw std::invalid_argument("Logical path is too long");
+    }
+    if (!IsValidUtf8(path)) {
+        throw std::invalid_argument("Logical path must be valid UTF-8");
     }
     std::string normalized;
     normalized.reserve(path.size());
@@ -112,6 +153,8 @@ void CsvPermissionProvider::Reload() {
         if (line_number == 1 && !fields.empty() && fields[0] == "路径") {
             continue;
         }
+        // 单行坏数据不能让整个文件（进而让服务启动）失败：跳过即等于不授权，是安全方向。
+        try {
         if (fields.size() != 8 && fields.size() != 9 && fields.size() != 10) {
             throw std::runtime_error("permissions.csv line " +
                                      std::to_string(line_number) +
@@ -151,6 +194,10 @@ void CsvPermissionProvider::Reload() {
                                      std::to_string(line_number));
         }
         next[rule.object][rule.path].push_back(std::move(rule));
+        } catch (const std::exception& error) {
+            std::cerr << "Ignoring permissions.csv line " << line_number << ": "
+                      << error.what() << '\n';
+        }
     }
 
     const auto modified = std::filesystem::last_write_time(file_);

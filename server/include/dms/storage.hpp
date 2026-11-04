@@ -4,6 +4,7 @@
 #include "dms/permission_provider.hpp"
 
 #include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -68,9 +69,11 @@ class AuthManager {
 public:
     explicit AuthManager(std::vector<UserAccount> users);
     std::optional<nlohmann::json> Login(const std::string& user,
-                                        const std::string& password);
+                                        const std::string& password,
+                                        const std::string& client_ip = {});
     std::optional<UserAccount> Resolve(const std::string& token) const;
     void Logout(const std::string& token);
+    std::vector<std::string> Sweep();
     static bool VerifyPassword(const std::string& password,
                                const std::string& salt_hex,
                                const std::string& hash_hex);
@@ -78,9 +81,25 @@ public:
                                     const std::string& salt_hex);
 
 private:
+    struct FailureState {
+        int count = 0;
+        std::chrono::steady_clock::time_point until{};
+        std::chrono::steady_clock::time_point last_failure{};
+    };
+
+    struct Session {
+        std::string user;
+        std::chrono::steady_clock::time_point expire_at;
+    };
+
+    static constexpr std::size_t kMaxFailureEntries = 4096;
+
     std::unordered_map<std::string, UserAccount> users_;
+    std::string dummy_salt_;
+    std::string dummy_hash_;
     mutable std::mutex mutex_;
-    std::unordered_map<std::string, std::string> tokens_;
+    std::unordered_map<std::string, FailureState> failures_;
+    std::unordered_map<std::string, Session> tokens_;
 };
 
 class AuditLog {
@@ -91,11 +110,13 @@ public:
                std::string path, std::string detail);
 
 private:
+    static constexpr std::size_t kMaxQueue = 10000;
     void Run();
     std::filesystem::path directory_;
     std::mutex mutex_;
     std::condition_variable ready_;
     std::deque<nlohmann::json> queue_;
+    std::size_t dropped_ = 0;
     bool stopping_ = false;
     std::thread worker_;
 };
@@ -154,6 +175,7 @@ private:
 
 std::filesystem::path ResolveSafePath(const std::filesystem::path& root,
                                       const std::string& logical_path);
+std::filesystem::path Utf8Path(const std::string& value);
 std::string UtcTimestamp();
 std::string MakeRandomToken();
 std::string ToHex(const unsigned char* data, std::size_t size);

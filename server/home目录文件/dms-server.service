@@ -1,0 +1,14 @@
+[Unit]
+Description=Drawing Management System server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dms
+ExecStart=/opt/dms/bin/dms-server --config /opt/dms/etc/config.json
+Restart=on-failure
+RestartSec=5
+UMask=0027
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run DMS deletion approval job daily
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+Unit=dms-cron.service
+
+[Install]
+WantedBy=timers.target

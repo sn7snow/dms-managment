@@ -167,11 +167,25 @@ int main(int argc, char* argv[]) {
                   << (tls_context ? "https://" : "http://")
                   << runtime.config.listen_address
                   << ':' << runtime.config.port << '\n';
+        // 最后一道防线：io.run() 抛异常会穿过线程入口终止进程，这里把它转成可恢复的循环。
+        const auto run = [](asio::io_context& context) {
+            for (;;) {
+                try {
+                    context.run();
+                    return;
+                } catch (const std::exception& error) {
+                    std::cerr << "io_context recovered from: " << error.what()
+                              << '\n';
+                } catch (...) {
+                    std::cerr << "io_context recovered from unknown exception\n";
+                }
+            }
+        };
         std::array<std::thread, 3> network_threads;
         for (auto& thread : network_threads) {
-            thread = std::thread([&io] { io.run(); });
+            thread = std::thread([&io, &run] { run(io); });
         }
-        io.run();
+        run(io);
         for (auto& thread : network_threads) {
             thread.join();
         }

@@ -106,20 +106,20 @@ void NotifyServer(const dms::Config& config) {
         return;
     }
 
-    asio::ssl::context context(asio::ssl::context::tls_client);
-    context.set_default_verify_paths();
-    context.load_verify_file(config.tls_ca_file.empty()
-                                 ? config.tls_cert_file
-                                 : config.tls_ca_file);
-    asio::ssl::stream<beast::tcp_stream> stream(io, context);
+    asio::ssl::context ssl_context(asio::ssl::context::tls_client);
+    ssl_context.set_default_verify_paths();
+    ssl_context.load_verify_file(config.tls_ca_file.empty()
+                                     ? config.tls_cert_file
+                                     : config.tls_ca_file);
+    asio::ssl::stream<beast::tcp_stream> stream(io, ssl_context);
     if (!SSL_set_tlsext_host_name(stream.native_handle(), "127.0.0.1")) {
         throw std::runtime_error("Unable to set TLS SNI for dms-server");
     }
     stream.set_verify_mode(asio::ssl::verify_peer);
     stream.set_verify_callback([](bool preverified,
-                                  asio::ssl::verify_context& context) {
+                                  asio::ssl::verify_context& verify_context) {
         if (!preverified) return false;
-        auto* store = context.native_handle();
+        auto* store = verify_context.native_handle();
         if (X509_STORE_CTX_get_error_depth(store) != 0) return true;
         return X509_check_ip_asc(
                    X509_STORE_CTX_get_current_cert(store), "127.0.0.1", 0) == 1;
@@ -180,7 +180,16 @@ int main(int argc, char* argv[]) {
                 remaining.push_back(line);
                 continue;
             }
-            const auto logical_path = dms::NormalizeLogicalPath(fields[1]);
+            std::string logical_path;
+            try {
+                logical_path = dms::NormalizeLogicalPath(fields[1]);
+            } catch (const std::exception& error) {
+                // 坏记录跳过而不是中止整批审批，避免一条脏数据卡死队列。
+                std::cerr << "Skipping pending-delete row with invalid path: "
+                          << error.what() << '\n';
+                remaining.push_back(line);
+                continue;
+            }
             if (status == 1) {
                 if (logical_path == "/") {
                     throw std::runtime_error(
