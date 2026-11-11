@@ -26,6 +26,7 @@ void MainWindow::showContextMenu(const QPoint& position) {
         auto* refresh_action = menu.addAction(tr("刷新目录"));
         refresh_action->setEnabled(HasPermission(item, ReadPermission));
         const auto* chosen = menu.exec(tree_->viewport()->mapToGlobal(position));
+        if (chosen == nullptr) return;
         if (chosen == create_action) createDirectory(item);
         else if (chosen == upload_action) uploadLocalFile(item);
         else if (chosen == archive_action) downloadArchive(item);
@@ -75,6 +76,7 @@ void MainWindow::showContextMenu(const QPoint& position) {
             document.editable && document.lock_held);
     }
     const auto* chosen = menu.exec(tree_->viewport()->mapToGlobal(position));
+    if (chosen == nullptr) return;
     if (chosen == open_action) openFile(item);
     else if (chosen == open_with_action) {
 #ifdef _WIN32

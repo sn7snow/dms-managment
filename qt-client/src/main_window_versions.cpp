@@ -76,6 +76,7 @@ void MainWindow::showVersions(QTreeWidgetItem* item) {
                             HasPermission(current_item, DeleteVersionPermission));
                     }
                     const auto* chosen = menu.exec(QCursor::pos());
+                    if (chosen == nullptr) return;
                     if (chosen == download_action) {
                         downloadVersion(path, selected_revision);
                     } else if (chosen == delete_action) {
