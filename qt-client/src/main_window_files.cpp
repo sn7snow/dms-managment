@@ -64,7 +64,9 @@ void MainWindow::openFile(QTreeWidgetItem* item, const QString& application) {
                 if (launch(local_file)) {
                     status_label_->setText(
                         lock_held ? tr("已打开并取得编辑锁")
-                                  : tr("只读打开：%1").arg(occupied_by));
+                                ：(accupied_by.isEmpty()
+                                  ? tr("只读打开，无写权限。")
+                                : tr("只读打开：%1").arg(occupied_by)));
                 } else {
                     QMessageBox::warning(
                         this, tr("打开图纸"),
@@ -76,7 +78,7 @@ void MainWindow::openFile(QTreeWidgetItem* item, const QString& application) {
     };
 
     if (!writable) {
-        download(false, tr("无写权限"), {}, 0);
+        download(false, {}, {}, 0);
         return;
     }
     const QByteArray body = QJsonDocument(QJsonObject{{"path", path}})
@@ -255,7 +257,7 @@ void MainWindow::uploadFolder(QTreeWidgetItem* item,
         QDir::Files | QDir::Hidden | QDir::NoSymLinks,
         QDirIterator::Subdirectories);
     while (files.hasNext()) job->files.push_back(files.next());
-    for (const auto& file_path : job->files) {
+    for (const QString& file_path : std::as_const(job->files)) {
         if (!isAllowedUploadExtension(file_path)) {
             QMessageBox::warning(
                 this, tr("上传文件夹"),
