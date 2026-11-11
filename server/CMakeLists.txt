@@ -45,6 +45,9 @@ target_link_libraries(dms_core
 )
 add_executable(dms-server
     src/server_api.cpp
+    src/server_api_support.cpp
+    src/server_archive.cpp
+    src/server_version_store.cpp
     src/server_http.cpp
     src/server_main.cpp
     src/server_runtime.cpp

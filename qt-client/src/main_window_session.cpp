@@ -439,7 +439,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
             }
             connect(&timeout, &QTimer::timeout,
                     &wait_for_release, &QEventLoop::quit);
-            timeout.start(1500);
+            timeout.start(5000);
             wait_for_release.exec();
             for (auto* reply : replies) reply->deleteLater();
             if (pending > 0 || failed > 0) {
@@ -466,7 +466,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
                 });
         connect(&logout_timeout, &QTimer::timeout,
                 &wait_for_logout, &QEventLoop::quit);
-        logout_timeout.start(1500);
+        logout_timeout.start(5000);
         wait_for_logout.exec();
         logout_reply->deleteLater();
         if (logout_failed || !logout_completed) {
