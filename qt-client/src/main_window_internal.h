@@ -53,6 +53,7 @@
 #include <QProcess>
 #include <QStringList>
 #include <QPalette>
+#include <QSlider>
 
 #include <utility>
 

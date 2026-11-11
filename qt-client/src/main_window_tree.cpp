@@ -3,6 +3,19 @@
 
 void MainWindow::refreshTree() {
     if (token_.isEmpty()) return;
+    // 记录刷新前所有已展开的目录路径，重建后逐级恢复
+    pending_expanded_paths_.clear();
+    std::function<void(QTreeWidgetItem*)> collect =
+        [&](QTreeWidgetItem* item) {
+            if (item->isExpanded() && IsDirectory(item)) {
+                pending_expanded_paths_.append(NodePath(item));
+            }
+            for (int i = 0;i < item->childCount(); ++i) {
+                collect(item->child(i));
+            }
+        };
+    collect(tree_->invisibleRootItem());
+
     children_requests_.clear();
     tree_->clear();
     nodes_.clear();
@@ -92,6 +105,22 @@ void MainWindow::loadChildren(QTreeWidgetItem* parent) {
                         if (node.isObject()) {
                             addNode(current_parent, node.toObject());
                         }
+                    }
+                    const QString prefix = path == "/" ? "/" : path + "/";
+                    for (auto it = pending_expanded_paths_.begin();
+                         it != pending_expanded_paths_.end();) {
+                        if (!it->startsWith(prefix)) {
+                            ++it;
+                            continue;
+                        }
+                        const QString reset = it->mid(prefix.size());
+                        if (reset.contains('/')) {
+                            ++it;
+                            continue;
+                        }
+                        auto* child_item = nodes_.value(*it, nullptr);
+                        it = pending_expanded_paths_.erase(it);
+                        if (child_item != nullptr) child_item->setExpanded(true);
                     }
                     if (selectedItem() == current_parent) {
                         const auto bits = document.object()

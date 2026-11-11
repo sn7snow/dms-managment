@@ -15,6 +15,10 @@ configure_file(
     COPYONLY
 )
 
+file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/theme"
+     DESTINATION "${CMAKE_CURRENT_BINARY_DIR}")
+
+
 qt_add_executable(dms-qt-client
     src/main.cpp
     src/main_window_files.cpp
@@ -43,3 +47,4 @@ endif()
 install(TARGETS dms-qt-client RUNTIME DESTINATION bin)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../etc/server-connection.json"
         DESTINATION bin)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/theme" DESTINATION bin)

@@ -758,6 +758,26 @@ Response HandleRequest(Runtime& runtime,
         return JsonResponse(request, http::status::ok, Json{{"ok", true}});
     }
 
+    if (route == "/api/file/release-all" && method == http::verb::post) {
+        std::vector<std::string> released_paths;
+        {
+            std::lock_guard lock(runtime.document_locks_mutex);
+            for (auto it = runtime.document_locks.begin();
+                 it != runtime.document_locks.end();) {
+                if (it->second.user == user->user) {
+                    released_paths.push_back(it->first);
+                    it = runtime.document_locks.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        for (const auto& path : released_paths) {
+            runtime.notifications.PublishRelease(path);
+        }
+        return JsonResponse(request, http::status::ok, Json{{"released", released_paths.size()}});
+    }
+
     if (route == "/api/notifications" && method == http::verb::get) {
         // Notifications exist only in per-session memory queues; nothing is persisted.
         runtime.notifications.Subscribe(token);

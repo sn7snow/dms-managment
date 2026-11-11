@@ -24,6 +24,7 @@ class QNetworkRequest;
 class QJsonObject;
 class QPlainTextEdit;
 class QPushButton;
+class QSlider;
 class QPoint;
 class QTimer;
 class QTreeWidget;
@@ -78,6 +79,7 @@ private:
     void requestEdit(QTreeWidgetItem* item);
     void closeDocument(const QString& path);
     void releaseServerLock(const QString& path);
+    void releaseAllServerLocks();
     void sendHeartbeats();
     void pollNotifications();
     void showNextNotification();
@@ -116,6 +118,8 @@ private:
     QPushButton* refresh_button_;
     QPushButton* open_button_;
     QPushButton* save_button_;
+    QPushButton* release_all_button_;
+    QSlider* overlay_slider_;
     QLabel* status_label_;
     QPlainTextEdit* message_view_;
     QTreeWidget* tree_;
@@ -134,6 +138,7 @@ private:
     bool heartbeat_request_in_flight_ = false;
     quint64 next_children_request_id_ = 0;
     QHash<QString, quint64> children_requests_;
+    QStringList pending_expanded_paths_;
     QHash<QString, OpenDocument> open_documents_;
     QHash<QString, QTreeWidgetItem*> nodes_;
 };

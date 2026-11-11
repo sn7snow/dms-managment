@@ -42,12 +42,15 @@ MainWindow::MainWindow(QWidget* parent)
                              "https://127.0.0.1:8080").toString());
     endpoint_edit_->setClearButtonEnabled(true);
     refresh_button_->setEnabled(false);
+    release_all_button_ = new QPushButton(tr("RAs"), this);
+    release_all_button_->setEnabled(false);
     open_button_->setEnabled(false);
     save_button_->setEnabled(false);
 
     auto* connection_layout = new QHBoxLayout;
     connection_layout->addWidget(new QLabel(tr("服务器:"), this));
     connection_layout->addWidget(endpoint_edit_, 1);
+    connection_layout->addWidget(release_all_button_);
     connection_layout->addWidget(connect_button_);
     connection_layout->addWidget(refresh_button_);
 
@@ -87,11 +90,42 @@ MainWindow::MainWindow(QWidget* parent)
     message_view_->setPlainText(DefaultNotifications().join('\n'));
 
     auto* central = new QWidget(this);
+    central->setObjectName("centralBackground");
     auto* layout = new QVBoxLayout(central);
     layout->addLayout(connection_layout);
     layout->addLayout(action_layout);
     layout->addWidget(message_view_);
     layout->addWidget(tree_, 1);
+
+    // 背景图：铺满主窗口，文件缺失则维持现状
+    const QString background = QCoreApplication::applicationDirPath() + "/theme/bacgr.jpg";
+    if (QFile::exists(background)) {
+        central->setStyleSheet(QStringLiteral(
+            "#centralBackground { border-image: url(\"%1\") 0 0 0 0 stretch stretch; }")
+            .arg(background));
+    }
+
+    // 右下角遮罩滑块：控制列表/消息区半透明白垫底的透明度
+    auto* overlay_layout = new QHBoxLayout;
+    overlay_layout->addStretch();
+    overlay_slider_ = new QSlider(Qt::Horizontal, this);
+    overlay_slider_->setRange(0, 100);
+    overlay_slider_->setFixedWidth(120);
+    overlay_layout->addWidget(overlay_slider_);
+    layout->addLayout(overlay_layout);
+
+    auto apply_overlay = [this](int value) {
+        const int alpha = value * 255 / 100;
+        const QString style = QStringLiteral(
+            "background: rgba(255,255,255,%1)").arg(alpha);
+        tree_->setStyleSheet(style);
+        message_view_->setStyleSheet(style);
+        QSettings overlay_settings;
+        overlay_settings.setValue("ui/overlay_alpha", value);
+    };
+    connect(overlay_slider_, &QSlider::valueChanged, this, apply_overlay);
+    overlay_slider_->setValue(settings.value("ui/overlay_alpha", 60).toInt());
+
     setCentralWidget(central);
 
     heartbeat_timer_->setInterval(5 * 60 * 1000);
@@ -113,6 +147,8 @@ MainWindow::MainWindow(QWidget* parent)
             });
     connect(refresh_button_, &QPushButton::clicked,
             this, &MainWindow::refreshTree);
+    connect(release_all_button_, &QPushButton::clicked,
+            this, &MainWindow::releaseAllServerLocks);
     connect(open_button_, &QPushButton::clicked,
             this, [this] { openFile(selectedItem()); });
     connect(save_button_, &QPushButton::clicked,
@@ -234,6 +270,7 @@ void MainWindow::connectToServer() {
                     connect_button_->setText(tr("注销"));
                     connect_button_->setEnabled(true);
                     refresh_button_->setEnabled(true);
+                    release_all_button_->setEnabled(true);
                     status_label_->setText(tr("已连接：%1").arg(username_));
                     refreshTree();
                     heartbeat_timer_->start();
@@ -297,6 +334,7 @@ void MainWindow::logout() {
             QMessageBox::Yes) {
         return;
     }
+    pending_expanded_paths_.clear();
     heartbeat_timer_->stop();
     notifications_timer_->stop();
     message_timer_->stop();
@@ -325,9 +363,35 @@ void MainWindow::logout() {
     connect_button_->setText(tr("连接并登录"));
     connect_button_->setEnabled(true);
     refresh_button_->setEnabled(false);
+    release_all_button_->setEnabled(false);
     open_button_->setEnabled(false);
     save_button_->setEnabled(false);
     status_label_->setText(tr("已注销"));
+}
+
+void MainWindow::releaseAllServerLocks() {
+    if (token_.isEmpty()) return;
+    release_all_button_->setEnabled(false);
+    status_label_->setText(tr("正在释放全部占用锁…"));
+    sendRequest(MethodName("POST"), apiUrl("/api/file/release-all"), {}, {},
+                [this](QNetworkReply* reply) {
+                    release_all_button_->setEnabled(!token_.isEmpty());
+                    if (reply->error() != QNetworkReply::NoError) {
+                        showReplyError(reply, tr("释放全部占用锁"));
+                        return;
+                    }
+                    for (auto it = open_documents_.begin();
+                         it != open_documents_.end(); ++it) {
+                        it->lock_held = false;
+                        setItemLockState(it.key(), {});
+                    }
+                    open_documents_.clear();
+                    save_button_->setEnabled(false);
+                    refreshTree();
+                    QMessageBox::information(
+                        this, tr("释放全部占用锁"),
+                        tr("锁已全部释放"));
+                });
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
