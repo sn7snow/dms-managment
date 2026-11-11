@@ -168,7 +168,7 @@ Response HandleRequest(Runtime& runtime,
         for (const auto& path : released_paths) {
             runtime.notifications.PublishRelease(path);
         }
-        runtime.audit.write(user->user, ip, "RELEASE_ALL", "",
+        runtime.audit.Write(user->user, ip, "RELEASE_ALL", "",
                 "释放全部锁" + std::to_string(released_paths.size()) + " 个");
         return JsonResponse(request, http::status::ok, Json{{"released", released_paths.size()}});
     }
